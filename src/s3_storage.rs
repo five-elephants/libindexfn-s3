@@ -6,27 +6,39 @@ use tokio::io::AsyncReadExt;
 
 pub struct S3Storage {
     bucket: String,
+    prefix: String,
     client: S3Client,
 }
 
 
 impl S3Storage {
-    pub fn new(region: Region, bucket: impl Into<String>) -> Self {
+    pub fn new(region: Region, bucket: impl Into<String>, prefix: impl Into<String>) -> Self {
         let client = S3Client::new(region);
 
         Self {
             bucket: bucket.into(),
+            prefix: prefix.into(),
             client,
         }
     }
 
 
-    fn make_prefix(dir_name: ObjectName<'_>) -> Option<String> {
-        let s = dir_name.as_str();
+    fn make_prefix(&self, dir_name: ObjectName<'_>) -> Option<String> {
+        let mut s = self.prefix.clone() + dir_name.as_str();
         if !s.is_empty() {
-            Some(String::from(dir_name.as_str()) + "/")
+            s.push('/');
+            Some(s)
         } else {
             None
+        }
+    }
+
+
+    fn make_key(&self, obj_name: ObjectName<'_>) -> String {
+        if !self.prefix.is_empty() {
+            self.prefix.clone() + obj_name.as_str()
+        } else {
+            String::from(obj_name.as_str())
         }
     }
 }
@@ -39,7 +51,7 @@ impl AccessStorage for S3Storage {
     async fn list(&self, dir_name: ObjectName<'_>) -> IdxResult<Self::ListIntoIter> {
         let mut req = ListObjectsV2Request {
             bucket: self.bucket.clone(),
-            prefix: Self::make_prefix(dir_name),
+            prefix: self.make_prefix(dir_name),
             ..ListObjectsV2Request::default()
         };
 
@@ -67,9 +79,10 @@ impl AccessStorage for S3Storage {
 
 
     async fn read_bytes(&self, obj_name: ObjectName<'_>) -> IdxResult<Vec<u8>> {
+        let key = self.make_key(obj_name);
         let req = GetObjectRequest {
             bucket: self.bucket.clone(),
-            key: obj_name.as_str().to_string(),
+            key: key,
             ..GetObjectRequest::default()
         };
 
@@ -90,9 +103,10 @@ impl AccessStorage for S3Storage {
             T: AsRef<[u8]> + Unpin + Send
     {
         let strm = ByteStream::from(data.as_ref().to_owned());
+        let key = self.make_key(name);
         let req = PutObjectRequest {
             bucket: self.bucket.clone(),
-            key: name.as_str().to_string(),
+            key: key,
             body: Some(strm),
 
             ..PutObjectRequest::default()
