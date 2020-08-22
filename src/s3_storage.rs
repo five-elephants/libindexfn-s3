@@ -4,6 +4,7 @@ use rusoto_s3::{S3,S3Client,GetObjectRequest,ListObjectsV2Request,PutObjectReque
 use async_trait::async_trait;
 use tokio::io::AsyncReadExt;
 
+#[derive(Clone)]
 pub struct S3Storage {
     bucket: String,
     prefix: String,
