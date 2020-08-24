@@ -12,3 +12,4 @@ rusoto_core = { version = "^0.45", default_features = false, features = ["rustls
 rusoto_s3 = { version = "^0.45", default_features = false, features = ["rustls"] }
 async-trait = "^0.1"
 tokio = "^0.2"
+log = "^0.4"

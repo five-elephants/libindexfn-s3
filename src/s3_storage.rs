@@ -3,6 +3,7 @@ use rusoto_core::{Region,ByteStream};
 use rusoto_s3::{S3,S3Client,GetObjectRequest,ListObjectsV2Request,PutObjectRequest};
 use async_trait::async_trait;
 use tokio::io::AsyncReadExt;
+use log::{debug,info,warn};
 
 #[derive(Clone)]
 pub struct S3Storage {
@@ -15,14 +16,17 @@ pub struct S3Storage {
 impl S3Storage {
     pub fn new(region: Region, bucket: impl Into<String>, prefix: impl Into<String>) -> Self {
         let client = S3Client::new(region);
+        let bucket = bucket.into();
         let mut prefix = prefix.into();
 
         if !prefix.ends_with('/') && !prefix.is_empty() {
             prefix.push('/');
         }
 
+        info!("Creating new S3Storage for bucket '{}' with prefix '{}'", bucket, prefix);
+
         Self {
-            bucket: bucket.into(),
+            bucket: bucket,
             prefix: prefix,
             client,
         }
@@ -32,7 +36,10 @@ impl S3Storage {
     fn make_prefix(&self, dir_name: ObjectName<'_>) -> Option<String> {
         let mut s = self.prefix.clone() + dir_name.as_str();
         if !s.is_empty() {
-            s.push('/');
+            if !s.ends_with('/') {
+                s.push('/');
+            }
+
             Some(s)
         } else {
             None
@@ -65,9 +72,14 @@ impl AccessStorage for S3Storage {
     type ListIntoIter = Vec<String>;
 
     async fn list(&self, dir_name: ObjectName<'_>) -> IdxResult<Self::ListIntoIter> {
+        let prefix = self.make_prefix(dir_name);
+
+        info!("List request for directory '{}' using prefix '{:?}'",
+                dir_name.as_str(), prefix);
+
         let mut req = ListObjectsV2Request {
             bucket: self.bucket.clone(),
-            prefix: self.make_prefix(dir_name),
+            prefix: prefix,
             ..ListObjectsV2Request::default()
         };
 
@@ -78,14 +90,20 @@ impl AccessStorage for S3Storage {
             if let Some(objects) = listing.contents {
                 for object in objects {
                     if let Some(key) = object.key {
+                        debug!("Listing '{}'", key);
                         let s = self.strip_prefix(dir_name, key)
                             .ok_or(IdxError::storage_error_msg("Could not strip prefix"))?;
                         rv.push(s.to_string());
+                    } else {
+                        warn!("Returned object {:?} did not have a key", object);
                     }
                 }
+            } else {
+                warn!("List request did not return any objects: {:?}", listing);
             }
 
             if let Some(cont) = listing.next_continuation_token {
+                info!("Continuing list request with token {:?}", cont);
                 req.continuation_token = Some(cont);
             } else {
                 break;
@@ -97,6 +115,8 @@ impl AccessStorage for S3Storage {
 
 
     async fn read_bytes(&self, obj_name: ObjectName<'_>) -> IdxResult<Vec<u8>> {
+        info!("Read bytes request for {:?}", obj_name.as_str());
+
         let key = self.make_key(obj_name);
         let req = GetObjectRequest {
             bucket: self.bucket.clone(),
@@ -122,6 +142,8 @@ impl AccessStorage for S3Storage {
         where
             T: AsRef<[u8]> + Unpin + Send
     {
+        info!("Write bytes request for {:?}", name.as_str());
+
         let strm = ByteStream::from(data.as_ref().to_owned());
         let key = self.make_key(name);
         let req = PutObjectRequest {
