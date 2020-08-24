@@ -15,10 +15,15 @@ pub struct S3Storage {
 impl S3Storage {
     pub fn new(region: Region, bucket: impl Into<String>, prefix: impl Into<String>) -> Self {
         let client = S3Client::new(region);
+        let mut prefix = prefix.into();
+
+        if !prefix.ends_with('/') && !prefix.is_empty() {
+            prefix.push('/');
+        }
 
         Self {
             bucket: bucket.into(),
-            prefix: prefix.into(),
+            prefix: prefix,
             client,
         }
     }
@@ -31,6 +36,16 @@ impl S3Storage {
             Some(s)
         } else {
             None
+        }
+    }
+
+
+    fn strip_prefix(&self, dir_name: ObjectName<'_>, key: String) -> Option<String> {
+        if let Some(prefix) = self.make_prefix(dir_name) {
+            key.strip_prefix(&prefix)
+                .map(|s| s.to_string())
+        } else {
+            Some(key.clone())
         }
     }
 
@@ -56,14 +71,16 @@ impl AccessStorage for S3Storage {
             ..ListObjectsV2Request::default()
         };
 
-        let mut rv = Vec::new();
+        let mut rv: Vec<String> = Vec::new();
         loop {
             let listing = self.client.list_objects_v2(req.clone()).await
-                .map_err(|_| IdxError::StorageError)?;
+                .map_err(IdxError::storage_error)?;
             if let Some(objects) = listing.contents {
                 for object in objects {
                     if let Some(key) = object.key {
-                        rv.push(key);
+                        let s = self.strip_prefix(dir_name, key)
+                            .ok_or(IdxError::storage_error_msg("Could not strip prefix"))?;
+                        rv.push(s.to_string());
                     }
                 }
             }
@@ -87,14 +104,16 @@ impl AccessStorage for S3Storage {
             ..GetObjectRequest::default()
         };
 
-        if let Some(strm) = self.client.get_object(req).await
-                .map_err(|_| IdxError::StorageError)?.body {
+        let resp = self.client.get_object(req).await
+                .map_err(IdxError::storage_error)?;
+
+        if let Some(strm) = resp.body {
             let mut contents = Vec::new();
             strm.into_async_read().read_to_end(&mut contents).await?;
 
             Ok(contents)
         } else {
-            Err(IdxError::StorageError)
+            Err(IdxError::storage_error_msg("Reading from S3 failed: no body returned"))
         }
     }
 
@@ -114,7 +133,7 @@ impl AccessStorage for S3Storage {
         };
 
         self.client.put_object(req).await
-            .map_err(|_| IdxError::StorageError)?;
+            .map_err(IdxError::storage_error)?;
 
         Ok(())
     }
